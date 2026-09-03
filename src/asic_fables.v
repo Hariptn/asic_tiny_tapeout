@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 `default_nettype none
 // TOP MODULE
-module exmmm_cms (
+module tt_um_tpmdle (
     input  wire [7:0] ui_in,       // Dedicated inputs
     output wire [7:0] uo_out,     // Dedicated outputs
     input  wire [7:0] uio_in,     // Bidirectional input path
