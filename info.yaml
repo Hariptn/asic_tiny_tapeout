@@ -1,11 +1,11 @@
 # Tiny Tapeout project information
 project:
-  title:        "direct memory mapped cache_1"      # Project title
+  title:        "Direct Mapped Cache with CPU Interface"      # Project title
   author:       "hari"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  ""      # One line description of what your project does
+  description:  "A direct-mapped cache (16 lines, 4 bytes/line) with a multiplexed CPU input interface and byte-addressable memory backend"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
-  clock_hz:     0       # Clock frequency in Hz (or 0 if not applicable)
+  clock_hz:     1000000       # Clock frequency in Hz (or 0 if not applicable)
 
   # How many tiles your design occupies? A single tile is about 167x108 uM.
   tiles: "1x1"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
@@ -23,28 +23,28 @@ project:
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: ""
-  ui[1]: ""
-  ui[2]: ""
-  ui[3]: ""
-  ui[4]: ""
-  ui[5]: ""
-  ui[6]: ""
-  ui[7]: ""
+  ui[0]: "addr[0]"
+  ui[1]: "addr[1]"
+  ui[2]: "addr[2]"
+  ui[3]: "addr[3]"
+  ui[4]: "addr[4]"
+  ui[5]: "addr[5]"
+  ui[6]: "addr[6]"
+  ui[7]: "addr[7]"
 
   # Outputs
-  uo[0]: ""
-  uo[1]: ""
-  uo[2]: ""
-  uo[3]: ""
-  uo[4]: ""
-  uo[5]: ""
-  uo[6]: ""
-  uo[7]: ""
+  uo[0]: "data[0]"
+  uo[1]: "data[1]"
+  uo[2]: "data[2]"
+  uo[3]: "data[3]"
+  uo[4]: "data[4]"
+  uo[5]: "data[5]"
+  uo[6]: "data[6]"
+  uo[7]: "data[7]"
 
   # Bidirectional pins
-  uio[0]: ""
-  uio[1]: ""
+  uio[0]: "cache request ready (output)"
+  uio[1]: "cache read data valid (output)"
   uio[2]: ""
   uio[3]: ""
   uio[4]: ""
