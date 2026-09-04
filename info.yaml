@@ -3,7 +3,7 @@ project:
   title:        "Direct Mapped Cache with CPU Interface"      # Project title
   author:       "hari"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "A direct-mapped cache (16 lines, 4 bytes/line) with a multiplexed CPU input interface and byte-addressable memory backend"      # One line description of what your project does
+  description:  "A 4-line direct-mapped, write-through cache with 2-byte lines and an internal 16-byte memory using a ready/valid CPU interface"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     1000000       # Clock frequency in Hz (or 0 if not applicable)
 
@@ -49,7 +49,7 @@ pinout:
   uio[3]: "write_data[3]"
   uio[4]: "write_enable"
   uio[5]: "request_valid"
-  uio[6]: ""
-  uio[7]: ""
+  uio[6]: "cache_ready"
+  uio[7]: "read_data_valid"
 # Do not change!
 yaml_version: 6

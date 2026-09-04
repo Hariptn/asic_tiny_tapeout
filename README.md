@@ -1,8 +1,25 @@
 ![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
 
-# Tiny Tapeout Verilog Project Template
+# Direct-Mapped Cache with CPU Interface
 
-- [Read the documentation for project](docs/info.md)
+This project implements a 4-line direct-mapped, write-through cache with
+2-byte cache lines and an internal 16-byte main memory. It exposes a
+ready/valid CPU-style interface through the Tiny Tapeout pins.
+
+See the [project documentation](docs/info.md) for the cache organization,
+pin protocol, and usage examples.
+
+## Running the tests
+
+The Cocotb testbench covers reset and ready signaling, reads and writes,
+cache hits and misses, aliasing, write-through behavior, full-memory sweeps,
+and `ena` gating. From the `test` directory, run:
+
+```sh
+make -B
+```
+
+See [test/README.md](test/README.md) for RTL and gate-level simulation details.
 
 ## What is Tiny Tapeout?
 
@@ -10,12 +27,12 @@ Tiny Tapeout is an educational project that aims to make it easier and cheaper t
 
 To learn more and get started, visit https://tinytapeout.com.
 
-## Set up your Verilog project
+## Project structure
 
-1. Add your Verilog files to the `src` folder.
-2. Edit the [info.yaml](info.yaml) and update information about your project, paying special attention to the `source_files` and `top_module` properties. If you are upgrading an existing Tiny Tapeout project, check out our [online info.yaml migration tool](https://tinytapeout.github.io/tt-yaml-upgrade-tool/).
-3. Edit [docs/info.md](docs/info.md) and add a description of your project.
-4. Adapt the testbench to your design. See [test/README.md](test/README.md) for more information.
+- `src/asic_fables.v` contains the top-level wrapper, cache controller, and main memory.
+- `docs/info.md` describes the design and pin-level protocol.
+- `test/test.py` contains the Cocotb functional tests.
+- `test/Makefile` defines the RTL and gate-level simulation commands.
 
 The GitHub action will automatically build the ASIC files using [LibreLane](https://www.zerotoasiccourse.com/terminology/librelane/).
 

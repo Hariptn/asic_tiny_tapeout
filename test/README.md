@@ -1,18 +1,22 @@
-# Sample testbench for a Tiny Tapeout project
+# Cocotb testbench
 
-This is a sample testbench for a Tiny Tapeout project. It uses [cocotb](https://docs.cocotb.org/en/stable/) to drive the DUT and check the outputs.
-See below to get started or for more information, check the [website](https://tinytapeout.com/hdl/testing/).
+This testbench uses [Cocotb](https://docs.cocotb.org/en/stable/) to exercise
+the `tt_um_tpmdle` direct-mapped cache through its Tiny Tapeout pin interface.
+The tests cover reset, ready/valid handshaking, cache hits and misses,
+write-through behavior, aliasing, memory sweeps, and `ena` gating.
 
 ## Setting up
 
-1. Edit [Makefile](Makefile) and modify `PROJECT_SOURCES` to point to your Verilog files.
-2. Edit [tb.v](tb.v) and replace `tt_um_example` with your module name.
+The RTL source is [../src/asic_fables.v](../src/asic_fables.v), and the
+testbench instantiates `tt_um_tpmdle` in [tb.v](tb.v). Python dependencies
+are listed in [requirements.txt](requirements.txt).
 
 ## How to run
 
-To run the RTL simulation:
+From this directory, install the dependencies and run the RTL simulation:
 
 ```sh
+python3 -m pip install -r requirements.txt
 make -B
 ```
 

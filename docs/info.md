@@ -9,7 +9,7 @@ You can also include images in this folder and reference them in the markdown. E
 
 ## How it works
 
-This project implements a direct-mapped cache with a one-cycle CPU-facing interface, backed by an internal 16-byte main memory.
+This project implements a direct-mapped cache with a ready/valid CPU-facing interface, backed by an internal 16-byte main memory.
 
 The design has two main parts:
 
@@ -31,9 +31,9 @@ To issue a request, first wait for `uio_out[6]` (`cache_ready`) to be high, then
 After the request is accepted, wait for `uio_out[6]` to go high again. For reads, `uo_out` holds the read byte and `uio_out[7]` pulses high when that data is valid.
 
 Example: to write `0xAB` to address `0x00`, then read it back —
-1. Drive `ui_in = 0xA0` and `uio_in = 0x3B` (address `0x0`, data `0xAB`, write + valid), one cycle.
+1. Drive `ui_in = 0xA0` and `uio_in = 0x3B` (address `0x0`, data `0xAB`, write + valid), for one clock cycle.
 2. Wait for `uio_out[6]` (`cache_ready`) to go high.
-3. Drive `ui_in = 0x00` and `uio_in = 0x20` (address `0x0`, read + valid), one cycle.
+3. Drive `ui_in = 0x00` and `uio_in = 0x20` (address `0x0`, read + valid), for one clock cycle.
 4. Wait for `uio_out[7]` (`read_data_valid`), then check `uo_out == 0xAB`.
 
 ## External hardware
