@@ -1,7 +1,7 @@
 # Tiny Tapeout project information
 project:
   title:        "Direct Mapped Cache with CPU Interface"      # Project title
-  author:       "hari"      # Your name
+  author:       "hari naveen vishnu"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
   description:  "A 4-line direct-mapped, write-through cache with 2-byte lines and an internal 16-byte memory using a ready/valid CPU interface"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
