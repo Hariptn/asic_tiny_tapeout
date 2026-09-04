@@ -104,7 +104,7 @@ module direct_mapped_cache (
 );
 
     // Latched CPU request.
-    reg [7:0] req_addr;
+    reg [3:0] req_addr;
     reg [7:0] req_wdata;
     reg       req_we;
 
@@ -281,5 +281,3 @@ module main_memory_16B (
     end
 
 endmodule
-
-`default_nettype wire
