@@ -136,6 +136,22 @@ async def test_read_miss_then_hit_is_faster(dut):
 
 
 @cocotb.test()
+async def test_write_hit_updates_cache(dut):
+    """Writing to a cached address must update the cache, not just memory."""
+    clock = Clock(dut.clk, CLOCK_PERIOD, units="us")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    addr = 0x5
+    await cache_write(dut, addr, 0x11)
+    await cache_read(dut, addr)          # miss -> now cached
+
+    await cache_write(dut, addr, 0x22)   # write-hit: line is resident
+    readback, cycles = await cache_read(dut, addr)  # should HIT with new data
+    assert readback == 0x22, f"stale cache data after write-hit: got {readback:#x}"
+
+
+@cocotb.test()
 async def test_cache_aliasing_and_writethrough(dut):
     """Addresses that alias to the same cache line (same index, different tag)
     must evict each other but still read correctly, since writes are
