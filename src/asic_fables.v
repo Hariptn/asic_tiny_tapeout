@@ -138,7 +138,7 @@ module direct_mapped_cache (
             mem_we          <= 1'b0;
             mem_addr        <= 4'd0;
             mem_wdata       <= 8'd0;
-            req_addr        <= 8'd0;
+            req_addr        <= 4'd0;
             req_wdata       <= 8'd0;
             req_we          <= 1'b0;
 
@@ -161,7 +161,7 @@ module direct_mapped_cache (
                     mem_req_valid <= 1'b0;
 
                     if (cpu_req_valid) begin
-                        req_addr  <= cpu_addr;
+                        req_addr  <= cpu_addr[3:0];
                         req_wdata <= cpu_wdata;
                         req_we    <= cpu_we;
                         cpu_req_ready <= 1'b0;
