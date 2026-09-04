@@ -1,644 +1,208 @@
-```python
+# SPDX-FileCopyrightText: © 2024 Tiny Tapeout
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Cocotb testbench for tt_um_tpmdle: a direct-mapped cache in front of a
+16-byte main memory, controlled over a ready/valid CPU-style bus.
+
+Bus protocol (see RTL comments):
+    ui_in[3:0]  = address[3:0]
+    ui_in[7:4]  = write data[7:4]
+    uio_in[3:0] = write data[3:0]
+    uio_in[4]   = write enable
+    uio_in[5]   = request valid
+    uio_out[6]  = cache ready  (uio_oe marks uio[7:6] as outputs)
+    uio_out[7]  = read-data valid
+    uo_out[7:0] = read data
+
+Address layout (4 bits): [3]=tag, [2:1]=index (4 lines), [0]=byte offset.
+Cache is write-through, no-write-allocate, direct-mapped, 4 lines x 2 bytes.
+"""
+
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, Timer
+from cocotb.triggers import ClockCycles, RisingEdge
 
+READY_BIT = 1 << 6   # uio_out[6] = cpu_req_ready
+RVALID_BIT = 1 << 7  # uio_out[7] = cpu_rdata_valid
 
-# ============================================================
-# Helper: Reset DUT
-# ============================================================
+CLOCK_PERIOD = 10  # us, matches the default TT clock convention
+TIMEOUT_CYCLES = 50
+
 
 async def reset_dut(dut):
-    """Apply active-low reset."""
-
-    dut.rst_n.value = 0
+    """Apply a clean reset with ena held high throughout."""
+    dut.ena.value = 1
     dut.ui_in.value = 0
     dut.uio_in.value = 0
-    dut.ena.value = 1
-
-    # Hold reset for a few clock cycles
-    for _ in range(3):
-        await RisingEdge(dut.clk)
-
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
     dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 2)
 
-    # Allow design to leave reset
-    for _ in range(2):
+
+async def wait_for_bit(dut, bitmask, timeout_cycles=TIMEOUT_CYCLES):
+    """Wait until uio_out has `bitmask` set. Returns cycles waited, or -1 on timeout."""
+    for cycle in range(1, timeout_cycles + 1):
         await RisingEdge(dut.clk)
+        if int(dut.uio_out.value) & bitmask:
+            return cycle
+    return -1
 
 
-# ============================================================
-# Helper: Read UIO status
-# ============================================================
-
-def cache_ready(dut):
-    """
-    uio_out[0] = cache ready
-    uio_out[1] = read data valid
-    """
-    return int(dut.uio_out.value) & 0x01
+async def wait_ready(dut, timeout_cycles=TIMEOUT_CYCLES):
+    cycles = await wait_for_bit(dut, READY_BIT, timeout_cycles)
+    assert cycles != -1, "Timeout waiting for cache ready"
+    return cycles
 
 
-def read_data_valid(dut):
-    return (int(dut.uio_out.value) >> 1) & 0x01
+async def cache_write(dut, addr, data):
+    """Issue a write request once the cache is ready, then wait for completion."""
+    await wait_ready(dut)
 
-
-# ============================================================
-# Helper: Wait until cache is ready
-# ============================================================
-
-async def wait_cache_ready(dut, timeout=30):
-
-    for _ in range(timeout):
-
-        if cache_ready(dut):
-            return
-
-        await RisingEdge(dut.clk)
-
-    raise AssertionError("Timeout waiting for cache ready")
-
-
-# ============================================================
-# Helper: CPU WRITE
-# ============================================================
-
-async def cpu_write(dut, address, data):
-    """
-    CPU write protocol:
-
-    Cycle 0 -> address
-    Cycle 1 -> write data
-    Cycle 2 -> control
-                 ui_in[0] = 1  -> WRITE
-                 ui_in[1] = 1  -> REQUEST VALID
-    """
-
-    address &= 0xFF
-    data &= 0xFF
-
-    print(f"WRITE: address=0x{address:02X}, data=0x{data:02X}")
-
-    # Wait until cache can accept request
-    await wait_cache_ready(dut)
-
-    # --------------------------------------------------------
-    # Cycle 0: Address
-    # --------------------------------------------------------
-
-    dut.ui_in.value = address
-    await RisingEdge(dut.clk)
-
-    # --------------------------------------------------------
-    # Cycle 1: Write data
-    # --------------------------------------------------------
-
-    dut.ui_in.value = data
-    await RisingEdge(dut.clk)
-
-    # --------------------------------------------------------
-    # Cycle 2: Control
-    #
-    # bit 0 = write enable
-    # bit 1 = request valid
-    # --------------------------------------------------------
-
-    dut.ui_in.value = 0b00000011
-    await RisingEdge(dut.clk)
-
-    # Release request
+    dut.ui_in.value = ((data & 0xF0) | (addr & 0x0F))
+    dut.uio_in.value = (data & 0x0F) | (1 << 5) | (1 << 4)  # req_valid=1, we=1
+    await RisingEdge(dut.clk)  # request sampled/accepted on this edge
+    dut.uio_in.value = 0
     dut.ui_in.value = 0
 
-    # Wait for write-through transaction to complete
-    await wait_cache_ready(dut)
-
-    # Give one extra cycle for signals to settle
-    await RisingEdge(dut.clk)
-
-    print("WRITE COMPLETE")
+    cycles = await wait_for_bit(dut, READY_BIT)
+    assert cycles != -1, f"Timeout waiting for write completion (addr={addr:#x})"
+    return cycles
 
 
-# ============================================================
-# Helper: CPU READ
-# ============================================================
+async def cache_read(dut, addr):
+    """Issue a read request once the cache is ready, then wait for the data."""
+    await wait_ready(dut)
 
-async def cpu_read(dut, address, expected=None):
-    """
-    CPU read protocol:
-
-    Cycle 0 -> address
-    Cycle 1 -> dummy data
-    Cycle 2 -> control
-                 ui_in[0] = 0 -> READ
-                 ui_in[1] = 1 -> REQUEST VALID
-
-    Returns the 8-bit read data.
-    """
-
-    address &= 0xFF
-
-    print(f"READ: address=0x{address:02X}")
-
-    # Wait until cache is ready
-    await wait_cache_ready(dut)
-
-    # --------------------------------------------------------
-    # Cycle 0: Address
-    # --------------------------------------------------------
-
-    dut.ui_in.value = address
-    await RisingEdge(dut.clk)
-
-    # --------------------------------------------------------
-    # Cycle 1: Dummy data
-    #
-    # Data is ignored for READ operations.
-    # --------------------------------------------------------
-
-    dut.ui_in.value = 0
-    await RisingEdge(dut.clk)
-
-    # --------------------------------------------------------
-    # Cycle 2: Control
-    #
-    # bit 0 = 0 -> READ
-    # bit 1 = 1 -> REQUEST VALID
-    # --------------------------------------------------------
-
-    dut.ui_in.value = 0b00000010
-    await RisingEdge(dut.clk)
-
-    # Release request
+    dut.ui_in.value = (addr & 0x0F)
+    dut.uio_in.value = (1 << 5)  # req_valid=1, we=0
+    await RisingEdge(dut.clk)  # request sampled/accepted on this edge
+    dut.uio_in.value = 0
     dut.ui_in.value = 0
 
-    # --------------------------------------------------------
-    # Wait for read data valid
-    # --------------------------------------------------------
+    cycles = await wait_for_bit(dut, RVALID_BIT)
+    assert cycles != -1, f"Timeout waiting for read data (addr={addr:#x})"
+    data = int(dut.uo_out.value)
+    return data, cycles
 
-    for _ in range(50):
-
-        await RisingEdge(dut.clk)
-
-        if read_data_valid(dut):
-
-            value = int(dut.uo_out.value) & 0xFF
-
-            print(
-                f"READ COMPLETE: "
-                f"address=0x{address:02X}, "
-                f"data=0x{value:02X}"
-            )
-
-            if expected is not None:
-
-                assert value == expected, (
-                    f"READ ERROR at address 0x{address:02X}: "
-                    f"expected 0x{expected:02X}, "
-                    f"got 0x{value:02X}"
-                )
-
-                print(
-                    f"PASS: address=0x{address:02X}, "
-                    f"data=0x{value:02X}"
-                )
-
-            return value
-
-    raise AssertionError(
-        f"Timeout waiting for read data "
-        f"at address 0x{address:02X}"
-    )
-
-
-# ============================================================
-# TEST 1
-# Reset Test
-# ============================================================
 
 @cocotb.test()
-async def test_reset(dut):
-
-    print("\n========================================")
-    print("TEST 1: RESET")
-    print("========================================")
-
-    # Start clock
-    cocotb.start_soon(
-        Clock(dut.clk, 10, units="ns").start()
-    )
+async def test_reset_and_ready(dut):
+    """After reset, the cache should come up idle and assert ready."""
+    dut._log.info("Start clock")
+    clock = Clock(dut.clk, CLOCK_PERIOD, units="us")
+    cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
 
-    # Cache should become ready after reset
-    await wait_cache_ready(dut)
+    cycles = await wait_for_bit(dut, READY_BIT)
+    assert cycles != -1, "cpu_req_ready never asserted after reset"
+    dut._log.info(f"Ready asserted {cycles} cycle(s) after reset")
 
-    print("PASS: Cache reset successfully")
-    print("========================================\n")
-
-
-# ============================================================
-# TEST 2
-# Write then Read
-# ============================================================
 
 @cocotb.test()
-async def test_write_read(dut):
-
-    print("\n========================================")
-    print("TEST 2: WRITE -> READ")
-    print("========================================")
-
-    cocotb.start_soon(
-        Clock(dut.clk, 10, units="ns").start()
-    )
-
+async def test_single_write_then_read(dut):
+    """A byte written to an address should read back correctly (cold miss then fill)."""
+    clock = Clock(dut.clk, CLOCK_PERIOD, units="us")
+    cocotb.start_soon(clock.start())
     await reset_dut(dut)
 
-    address = 0x10
-    data = 0xAB
+    addr, data = 0x3, 0xAB
+    await cache_write(dut, addr, data)
 
-    # Write data
-    await cpu_write(dut, address, data)
+    readback, _ = await cache_read(dut, addr)
+    assert readback == data, f"addr={addr:#x}: expected {data:#x}, got {readback:#x}"
 
-    # Read the same address
-    result = await cpu_read(
-        dut,
-        address,
-        expected=data
-    )
-
-    assert result == data
-
-    print("PASS: Write followed by read")
-    print("========================================\n")
-
-
-# ============================================================
-# TEST 3
-# Read Hit
-# ============================================================
 
 @cocotb.test()
-async def test_read_hit(dut):
-
-    print("\n========================================")
-    print("TEST 3: READ HIT")
-    print("========================================")
-
-    cocotb.start_soon(
-        Clock(dut.clk, 10, units="ns").start()
-    )
-
+async def test_read_miss_then_hit_is_faster(dut):
+    """A repeat read of the same address (now cached) should complete in fewer
+    cycles than the original cold miss that had to fetch from main memory."""
+    clock = Clock(dut.clk, CLOCK_PERIOD, units="us")
+    cocotb.start_soon(clock.start())
     await reset_dut(dut)
 
-    address = 0x20
-    data = 0x5A
+    addr, data = 0x5, 0x7E
+    await cache_write(dut, addr, data)
 
-    # First write
-    await cpu_write(dut, address, data)
+    miss_data, miss_cycles = await cache_read(dut, addr)  # cache empty -> miss, fetch from mem
+    hit_data, hit_cycles = await cache_read(dut, addr)    # now cached -> hit
 
-    # First read
-    await cpu_read(
-        dut,
-        address,
-        expected=data
-    )
+    assert miss_data == data
+    assert hit_data == data
+    dut._log.info(f"Miss took {miss_cycles} cycles, hit took {hit_cycles} cycles")
+    assert hit_cycles < miss_cycles, "Cache hit should resolve faster than a cold miss"
 
-    # Second read
-    #
-    # The cache line should already be present,
-    # therefore this should be a CACHE HIT.
-    result = await cpu_read(
-        dut,
-        address,
-        expected=data
-    )
-
-    assert result == data
-
-    print("PASS: Read hit")
-    print("========================================\n")
-
-
-# ============================================================
-# TEST 4
-# Byte Offset Test
-# ============================================================
 
 @cocotb.test()
-async def test_byte_offsets(dut):
-
-    print("\n========================================")
-    print("TEST 4: BYTE OFFSET TEST")
-    print("========================================")
-
-    cocotb.start_soon(
-        Clock(dut.clk, 10, units="ns").start()
-    )
-
+async def test_cache_aliasing_and_writethrough(dut):
+    """Addresses that alias to the same cache line (same index, different tag)
+    must evict each other but still read correctly, since writes are
+    write-through and always land in main memory."""
+    clock = Clock(dut.clk, CLOCK_PERIOD, units="us")
+    cocotb.start_soon(clock.start())
     await reset_dut(dut)
 
-    # Same cache line:
-    #
-    # Address 0x00 -> offset 00
-    # Address 0x01 -> offset 01
-    # Address 0x02 -> offset 10
-    # Address 0x03 -> offset 11
+    # index = addr[2:1]. addr 0x0 and 0x8 share index 0 but differ in tag (bit 3).
+    addr_a, data_a = 0x0, 0x11
+    addr_b, data_b = 0x8, 0x22
 
-    test_data = {
-        0x00: 0x11,
-        0x01: 0x22,
-        0x02: 0x33,
-        0x03: 0x44
-    }
+    await cache_write(dut, addr_a, data_a)
+    await cache_write(dut, addr_b, data_b)
 
-    # Write all four bytes
-    for address, data in test_data.items():
+    # Read addr_a: forces the shared line to reload from main memory,
+    # which must still hold the correct write-through value.
+    read_a, _ = await cache_read(dut, addr_a)
+    assert read_a == data_a, f"addr={addr_a:#x}: expected {data_a:#x}, got {read_a:#x}"
 
-        await cpu_write(
-            dut,
-            address,
-            data
+    # Read addr_b: this evicts addr_a's line again; value must still be correct.
+    read_b, _ = await cache_read(dut, addr_b)
+    assert read_b == data_b, f"addr={addr_b:#x}: expected {data_b:#x}, got {read_b:#x}"
+
+    # Re-read addr_a once more to confirm the alias round-trips cleanly.
+    read_a2, _ = await cache_read(dut, addr_a)
+    assert read_a2 == data_a, f"addr={addr_a:#x}: expected {data_a:#x}, got {read_a2:#x}"
+
+
+@cocotb.test()
+async def test_full_memory_sweep(dut):
+    """Write a distinct byte to every one of the 16 memory addresses, then
+    read every address back in reverse order to exercise every cache line
+    and every possible eviction, checking write-through correctness."""
+    clock = Clock(dut.clk, CLOCK_PERIOD, units="us")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    expected = {addr: (addr * 7 + 3) & 0xFF for addr in range(16)}
+
+    for addr, data in expected.items():
+        await cache_write(dut, addr, data)
+
+    for addr in reversed(range(16)):
+        data, _ = await cache_read(dut, addr)
+        assert data == expected[addr], (
+            f"addr={addr:#x}: expected {expected[addr]:#x}, got {data:#x}"
         )
 
-    # Read all four bytes
-    for address, expected in test_data.items():
-
-        result = await cpu_read(
-            dut,
-            address,
-            expected=expected
-        )
-
-        assert result == expected
-
-    print("PASS: All four byte offsets")
-    print("========================================\n")
-
-
-# ============================================================
-# TEST 5
-# Cache Miss / Allocation
-# ============================================================
 
 @cocotb.test()
-async def test_cache_miss_allocate(dut):
-
-    print("\n========================================")
-    print("TEST 5: CACHE MISS + ALLOCATION")
-    print("========================================")
-
-    cocotb.start_soon(
-        Clock(dut.clk, 10, units="ns").start()
-    )
-
+async def test_ena_gates_operation(dut):
+    """While ena is low, the cache must hold in idle and never assert ready."""
+    clock = Clock(dut.clk, CLOCK_PERIOD, units="us")
+    cocotb.start_soon(clock.start())
     await reset_dut(dut)
 
-    address = 0x30
-    data = 0x77
+    # Confirm normal operation first.
+    await cache_write(dut, 0x1, 0x99)
 
-    # --------------------------------------------------------
-    # Write to main memory.
-    #
-    # Because your cache uses WRITE-THROUGH and
-    # NO-WRITE-ALLOCATE, this updates main memory
-    # but does not allocate the cache line.
-    # --------------------------------------------------------
+    # Disable and hold for a few cycles; ready must stay low.
+    dut.ena.value = 0
+    await ClockCycles(dut.clk, 5)
+    assert int(dut.uio_out.value) & READY_BIT == 0, "ready must be low while ena=0"
 
-    await cpu_write(
-        dut,
-        address,
-        data
-    )
-
-    # --------------------------------------------------------
-    # First READ
-    #
-    # This should cause:
-    #
-    # CPU
-    #   ↓
-    # CACHE MISS
-    #   ↓
-    # MAIN MEMORY
-    #   ↓
-    # CACHE LINE ALLOCATION
-    #   ↓
-    # READ DATA
-    # --------------------------------------------------------
-
-    result = await cpu_read(
-        dut,
-        address,
-        expected=data
-    )
-
-    assert result == data
-
-    # --------------------------------------------------------
-    # Second READ
-    #
-    # The block should now be in cache.
-    # Therefore this should be a HIT.
-    # --------------------------------------------------------
-
-    result = await cpu_read(
-        dut,
-        address,
-        expected=data
-    )
-
-    assert result == data
-
-    print("PASS: Cache miss followed by allocation and hit")
-    print("========================================\n")
-
-
-# ============================================================
-# TEST 6
-# Different Addresses
-# ============================================================
-
-@cocotb.test()
-async def test_multiple_addresses(dut):
-
-    print("\n========================================")
-    print("TEST 6: MULTIPLE ADDRESS TEST")
-    print("========================================")
-
-    cocotb.start_soon(
-        Clock(dut.clk, 10, units="ns").start()
-    )
-
-    await reset_dut(dut)
-
-    test_vectors = [
-        (0x04, 0x12),
-        (0x08, 0x34),
-        (0x0C, 0x56),
-        (0x10, 0x78),
-        (0x14, 0x9A),
-        (0x18, 0xBC),
-    ]
-
-    # Write
-    for address, data in test_vectors:
-
-        await cpu_write(
-            dut,
-            address,
-            data
-        )
-
-    # Read
-    for address, expected in test_vectors:
-
-        result = await cpu_read(
-            dut,
-            address,
-            expected=expected
-        )
-
-        assert result == expected
-
-    print("PASS: Multiple address test")
-    print("========================================\n")
-
-
-# ============================================================
-# TEST 7
-# Cache Conflict / Replacement
-# ============================================================
-
-@cocotb.test()
-async def test_cache_conflict(dut):
-
-    print("\n========================================")
-    print("TEST 7: CACHE CONFLICT / REPLACEMENT")
-    print("========================================")
-
-    cocotb.start_soon(
-        Clock(dut.clk, 10, units="ns").start()
-    )
-
-    await reset_dut(dut)
-
-    # --------------------------------------------------------
-    # Address format:
-    #
-    # [7:6] = TAG
-    # [5:2] = INDEX
-    # [1:0] = OFFSET
-    #
-    # 0x04 = 0000 0100
-    #
-    # TAG   = 00
-    # INDEX = 0001
-    #
-    # 0x44 = 0100 0100
-    #
-    # TAG   = 01
-    # INDEX = 0001
-    #
-    # Therefore:
-    #
-    # 0x04 and 0x44 map to the SAME cache line
-    # but have DIFFERENT tags.
-    # --------------------------------------------------------
-
-    address1 = 0x04
-    data1 = 0xAA
-
-    address2 = 0x44
-    data2 = 0x55
-
-    # Put first value in memory
-    await cpu_write(
-        dut,
-        address1,
-        data1
-    )
-
-    # Load address1 into cache
-    await cpu_read(
-        dut,
-        address1,
-        expected=data1
-    )
-
-    # Put second value in memory
-    await cpu_write(
-        dut,
-        address2,
-        data2
-    )
-
-    # Reading address2 should replace address1's cache line
-    await cpu_read(
-        dut,
-        address2,
-        expected=data2
-    )
-
-    # Reading address1 again should now MISS
-    # and reload address1 from main memory.
-    await cpu_read(
-        dut,
-        address1,
-        expected=data1
-    )
-
-    print("PASS: Cache conflict/replacement")
-    print("========================================\n")
-
-
-# ============================================================
-# TEST 8
-# Sequential Access
-# ============================================================
-
-@cocotb.test()
-async def test_sequential_access(dut):
-
-    print("\n========================================")
-    print("TEST 8: SEQUENTIAL ACCESS")
-    print("========================================")
-
-    cocotb.start_soon(
-        Clock(dut.clk, 10, units="ns").start()
-    )
-
-    await reset_dut(dut)
-
-    base_address = 0x40
-
-    values = [
-        0x10,
-        0x20,
-        0x30,
-        0x40
-    ]
-
-    # Write four consecutive bytes
-    for i, value in enumerate(values):
-
-        await cpu_write(
-            dut,
-            base_address + i,
-            value
-        )
-
-    # Read them back
-    for i, expected in enumerate(values):
-
-        result = await cpu_read(
-            dut,
-            base_address + i,
-            expected=expected
-        )
-
-        assert result == expected
-
-    print("PASS: Sequential access")
-    print("========================================\n")
-```
+    # Re-enable and confirm the cache resumes normal operation.
+    dut.ena.value = 1
+    await wait_ready(dut)
+    readback, _ = await cache_read(dut, 0x1)
+    assert readback == 0x99, f"expected 0x99 after re-enable, got {readback:#x}"
